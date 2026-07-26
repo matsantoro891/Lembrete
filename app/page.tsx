@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { parseReminderText } from "@/lib/parseReminderText";
 
 type Reminder = {
   id: string;
@@ -15,81 +16,8 @@ type Tab = "today" | "upcoming" | "late";
 
 const STORAGE_KEY = "lembrete-voz-reminders-v1";
 const CALENDAR_TIP_KEY = "lembrete-voz-calendar-tip-seen";
-
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function localDateValue(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function localTimeValue(date: Date): string {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function normalizeHour(hour: number): number {
-  return Math.max(0, Math.min(23, hour));
-}
-
-function suggestDateAndTime(phrase: string): { date?: string; time?: string } {
-  const text = phrase.toLocaleLowerCase("pt-BR").replace(/\s+/g, " ").trim();
-  const now = new Date();
-
-  const minutesMatch = text.match(/daqui\s+(?:a\s+)?(\d{1,4})\s+minuto/);
-  if (minutesMatch) {
-    const result = new Date(now.getTime() + Number(minutesMatch[1]) * 60_000);
-    return { date: localDateValue(result), time: localTimeValue(result) };
-  }
-
-  const hoursMatch = text.match(/daqui\s+(?:a\s+)?(\d{1,3})\s+hora/);
-  if (hoursMatch) {
-    const result = new Date(now.getTime() + Number(hoursMatch[1]) * 3_600_000);
-    return { date: localDateValue(result), time: localTimeValue(result) };
-  }
-
-  const clockMatch = text.match(/(?:às|as)\s+(\d{1,2})(?:[:h](\d{2}))?/);
-  const hour = clockMatch ? normalizeHour(Number(clockMatch[1])) : undefined;
-  const minute = clockMatch?.[2] ? Math.min(59, Number(clockMatch[2])) : 0;
-
-  if (text.includes("amanhã") || text.includes("amanha")) {
-    const result = new Date(now);
-    result.setDate(result.getDate() + 1);
-    if (hour !== undefined) result.setHours(hour, minute, 0, 0);
-    return {
-      date: localDateValue(result),
-      time: hour !== undefined ? localTimeValue(result) : undefined,
-    };
-  }
-
-  if (text.includes("hoje")) {
-    const result = new Date(now);
-    if (hour !== undefined) result.setHours(hour, minute, 0, 0);
-    return {
-      date: localDateValue(result),
-      time: hour !== undefined ? localTimeValue(result) : undefined,
-    };
-  }
-
-  const dateMatch = text.match(/(?:dia\s+)?(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
-  if (dateMatch) {
-    const day = Number(dateMatch[1]);
-    const month = Number(dateMatch[2]) - 1;
-    let year = dateMatch[3] ? Number(dateMatch[3]) : now.getFullYear();
-    if (year < 100) year += 2000;
-    const result = new Date(year, month, day, hour ?? 9, minute, 0, 0);
-    return { date: localDateValue(result), time: hour !== undefined ? localTimeValue(result) : undefined };
-  }
-
-  if (hour !== undefined) {
-    const result = new Date(now);
-    result.setHours(hour, minute, 0, 0);
-    if (result.getTime() <= now.getTime()) result.setDate(result.getDate() + 1);
-    return { date: localDateValue(result), time: localTimeValue(result) };
-  }
-
-  return {};
-}
+const AUTO_PARSE_STATUS =
+  "Data e horário identificados automaticamente. Revise antes de salvar.";
 
 function formatReminderDate(iso: string): string {
   const date = new Date(iso);
@@ -218,10 +146,36 @@ export default function Home() {
 
   const canAdd = text.trim().length > 0 && Boolean(date) && Boolean(time);
 
-  function applySuggestions(value: string) {
-    const suggestion = suggestDateAndTime(value);
-    if (!date && suggestion.date) setDate(suggestion.date);
-    if (!time && suggestion.time) setTime(suggestion.time);
+  function applyParsedReminder(
+    value: string,
+    options?: { updateDescription?: boolean; fromVoice?: boolean },
+  ) {
+    const parsed = parseReminderText(value);
+    const updateDescription = options?.updateDescription ?? false;
+    const fromVoice = options?.fromVoice ?? false;
+
+    if (updateDescription && parsed.description) {
+      setText(parsed.description);
+    }
+
+    let filledSomething = false;
+
+    if (!date && parsed.date) {
+      setDate(parsed.date);
+      filledSomething = true;
+    }
+
+    if (!time && parsed.time) {
+      setTime(parsed.time);
+      filledSomething = true;
+    }
+
+    const identified = parsed.confidence.date || parsed.confidence.time;
+
+    if (identified && (filledSomething || fromVoice)) {
+      setAlertMinutes(parsed.alertMinutes);
+      setStatus(AUTO_PARSE_STATUS);
+    }
   }
 
   function startListening() {
@@ -259,7 +213,9 @@ export default function Home() {
 
       const nextText = [baseTextRef.current, transcript.trim()].filter(Boolean).join(" ").trim();
       setText(nextText);
-      if (hasFinalResult) applySuggestions(nextText);
+      if (hasFinalResult) {
+        applyParsedReminder(nextText, { updateDescription: true, fromVoice: true });
+      }
     };
 
     recognition.onerror = (event: any) => {
@@ -275,7 +231,13 @@ export default function Home() {
 
     recognition.onend = () => {
       setIsListening(false);
-      setStatus((current) => (current.startsWith("Ouvindo") ? "Revise o texto e escolha a data e o horário." : current));
+      setStatus((current) => {
+        if (current === AUTO_PARSE_STATUS) return current;
+        if (current.startsWith("Ouvindo")) {
+          return "Revise o texto e escolha a data e o horário.";
+        }
+        return current;
+      });
     };
 
     recognitionRef.current = recognition;
@@ -426,7 +388,7 @@ export default function Home() {
           onChange={(event) => {
             const value = event.target.value;
             setText(value);
-            applySuggestions(value);
+            applyParsedReminder(value, { updateDescription: false });
           }}
           rows={3}
           maxLength={500}

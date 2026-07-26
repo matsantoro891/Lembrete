@@ -1,0 +1,113 @@
+import { describe, expect, it } from "vitest";
+import { parseReminderText } from "./parseReminderText";
+
+/** Domingo, 26 de julho de 2026, 15:00 */
+const REF = new Date(2026, 6, 26, 15, 0, 0, 0);
+
+describe("parseReminderText", () => {
+  it("interpreta consulta com dia, mês e horário", () => {
+    const result = parseReminderText(
+      "Consulta dia 10 de novembro às 8 horas",
+      REF,
+    );
+
+    expect(result.description).toBe("Consulta");
+    expect(result.date).toBe("2026-11-10");
+    expect(result.time).toBe("08:00");
+    expect(result.alertMinutes).toBe(10);
+    expect(result.confidence.date).toBe(true);
+    expect(result.confidence.time).toBe(true);
+  });
+
+  it("interpreta dentista amanhã com horário compacto", () => {
+    const result = parseReminderText("Dentista amanhã às 14h30", REF);
+
+    expect(result.description).toBe("Dentista");
+    expect(result.date).toBe("2026-07-27");
+    expect(result.time).toBe("14:30");
+    expect(result.alertMinutes).toBe(10);
+  });
+
+  it("interpreta reunião na próxima sexta à tarde", () => {
+    const result = parseReminderText(
+      "Reunião sexta-feira às três da tarde",
+      REF,
+    );
+
+    expect(result.description).toBe("Reunião");
+    // 26/07/2026 é domingo → próxima sexta é 31/07/2026
+    expect(result.date).toBe("2026-07-31");
+    expect(result.time).toBe("15:00");
+    expect(result.alertMinutes).toBe(10);
+  });
+
+  it("interpreta comprar pão hoje à noite", () => {
+    const result = parseReminderText(
+      "Comprar pão hoje às oito da noite",
+      REF,
+    );
+
+    expect(result.description).toBe("Comprar pão");
+    expect(result.date).toBe("2026-07-26");
+    expect(result.time).toBe("20:00");
+    expect(result.alertMinutes).toBe(10);
+  });
+
+  it("interpreta data sem horário", () => {
+    const result = parseReminderText("Tomar vacina dia 5 de janeiro", REF);
+
+    expect(result.description).toBe("Tomar vacina");
+    expect(result.date).toBe("2027-01-05");
+    expect(result.time).toBeNull();
+    expect(result.alertMinutes).toBe(10);
+  });
+
+  it("usa hoje quando o horário ainda não passou", () => {
+    const morning = new Date(2026, 6, 26, 8, 0, 0, 0);
+    const result = parseReminderText("Ligar para Maria às 9 horas", morning);
+
+    expect(result.description).toBe("Ligar para Maria");
+    expect(result.date).toBe("2026-07-26");
+    expect(result.time).toBe("09:00");
+    expect(result.alertMinutes).toBe(10);
+  });
+
+  it("usa amanhã quando o horário já passou", () => {
+    const evening = new Date(2026, 6, 26, 10, 0, 0, 0);
+    const result = parseReminderText("Ligar para Maria às 9 horas", evening);
+
+    expect(result.description).toBe("Ligar para Maria");
+    expect(result.date).toBe("2026-07-27");
+    expect(result.time).toBe("09:00");
+    expect(result.alertMinutes).toBe(10);
+  });
+
+  it("mantém só a descrição quando não há data nem horário", () => {
+    const result = parseReminderText("Comprar presente", REF);
+
+    expect(result.description).toBe("Comprar presente");
+    expect(result.date).toBeNull();
+    expect(result.time).toBeNull();
+    expect(result.alertMinutes).toBe(10);
+    expect(result.confidence.date).toBe(false);
+    expect(result.confidence.time).toBe(false);
+  });
+
+  it("não aceita data inválida como 31 de fevereiro", () => {
+    const result = parseReminderText("Consulta dia 31 de fevereiro às 10 horas", REF);
+
+    expect(result.date).toBeNull();
+    expect(result.time).toBe("10:00");
+  });
+
+  it("usa o próximo ano quando o dia/mês do ano atual já passou", () => {
+    const afterNovember = new Date(2026, 10, 11, 12, 0, 0, 0);
+    const result = parseReminderText(
+      "Consulta dia 10 de novembro às 8 horas",
+      afterNovember,
+    );
+
+    expect(result.date).toBe("2027-11-10");
+    expect(result.time).toBe("08:00");
+  });
+});
