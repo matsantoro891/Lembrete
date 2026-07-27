@@ -2,13 +2,13 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Lembrete Voz",
+  title: "Lembrete MS",
   description: "Fale, confirme e adicione seus lembretes ao Calendário do iPhone.",
-  applicationName: "Lembrete Voz",
+  applicationName: "Lembrete MS",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Lembrete Voz",
+    title: "Lembrete MS",
   },
   formatDetection: {
     telephone: false,

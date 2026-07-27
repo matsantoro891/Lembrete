@@ -1,4 +1,4 @@
-# Lembrete Voz
+# Lembrete MS
 
 Aplicativo web simples para criar lembretes por voz, revisar o texto, escolher data/horário e abrir um evento preparado no Calendário do iPhone por meio de um arquivo `.ics`.
 
@@ -47,7 +47,7 @@ npm start
 2. Abra o GitHub Desktop.
 3. Vá em **File > Add local repository** e selecione a pasta.
 4. Caso apareça que a pasta ainda não é um repositório, escolha **Create a repository here**.
-5. Faça o primeiro commit com a mensagem `Aplicativo Lembrete Voz`.
+5. Faça o primeiro commit com a mensagem `Aplicativo Lembrete MS`.
 6. Clique em **Publish repository**.
 7. Deixe como privado ou público, conforme preferir.
 

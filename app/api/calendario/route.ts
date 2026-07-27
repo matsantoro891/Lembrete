@@ -68,13 +68,13 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const fim = new Date(inicio.getTime() + 30 * 60 * 1000);
   const agora = new Date();
-  const uid = `${crypto.randomUUID()}@lembrete-voz`;
-  const descricao = "Lembrete criado pelo Lembrete Voz";
+  const uid = `${crypto.randomUUID()}@lembrete-ms`;
+  const descricao = "Lembrete criado pelo Lembrete MS";
 
   const rawLines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Lembrete Voz//PT-BR",
+    "PRODID:-//Lembrete MS//PT-BR",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "BEGIN:VEVENT",

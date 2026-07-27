@@ -52,12 +52,11 @@ button {
   position: sticky;
   top: 0;
   z-index: 20;
-  min-height: 142px;
-  padding: max(22px, env(safe-area-inset-top)) 32px 24px;
+  min-height: 96px;
+  padding: max(16px, env(safe-area-inset-top)) 72px 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  justify-content: center;
   background: rgba(248, 250, 253, 0.94);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(18px);
@@ -65,50 +64,69 @@ button {
 
 .brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 22px;
+  justify-content: center;
+  gap: 6px;
   min-width: 0;
+  max-width: 100%;
+  text-align: center;
 }
 
-.brand-icon {
-  width: 82px;
-  height: 82px;
-  flex: 0 0 82px;
-  display: grid;
-  place-items: center;
-  border-radius: 28px;
-  color: white;
-  background: var(--navy);
-  box-shadow: 0 14px 28px rgba(16, 42, 80, 0.14);
+.app-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--navy);
+}
+
+.app-logo-line {
+  width: clamp(24px, 6vw, 36px);
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.72;
+}
+
+.app-logo-text {
+  font-size: clamp(20px, 4.8vw, 26px);
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  line-height: 1;
+  padding-left: 0.28em;
 }
 
 .brand h1 {
   margin: 0;
-  font-size: clamp(29px, 5.2vw, 38px);
-  line-height: 1.03;
-  letter-spacing: -0.04em;
-  white-space: nowrap;
-}
-
-.brand p {
-  margin: 10px 0 0;
-  color: var(--muted);
-  font-size: clamp(17px, 3.4vw, 24px);
-  font-weight: 600;
+  color: var(--navy);
+  font-size: clamp(22px, 4.2vw, 28px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
   white-space: nowrap;
 }
 
 .settings-button {
-  width: 82px;
-  height: 82px;
-  flex: 0 0 82px;
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-top: calc(env(safe-area-inset-top) / 2);
+  width: 52px;
+  height: 52px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 28px;
+  border-radius: 18px;
   color: var(--navy);
   background: #edf2f8;
   cursor: pointer;
+}
+
+.settings-button svg {
+  width: 26px;
+  height: 26px;
 }
 
 .creator-card {
@@ -594,40 +612,43 @@ button {
 
 @media (max-width: 620px) {
   .topbar {
-    min-height: 112px;
-    padding-left: 20px;
-    padding-right: 20px;
+    min-height: 84px;
+    padding-left: 60px;
+    padding-right: 60px;
+    padding-bottom: 12px;
   }
 
   .brand {
-    gap: 14px;
+    gap: 4px;
   }
 
-  .brand-icon,
+  .app-logo {
+    gap: 10px;
+  }
+
+  .app-logo-line {
+    width: 22px;
+  }
+
+  .app-logo-text {
+    font-size: 20px;
+    letter-spacing: 0.24em;
+  }
+
   .settings-button {
-    width: 64px;
-    height: 64px;
-    flex-basis: 64px;
-    border-radius: 22px;
-  }
-
-  .brand-icon svg {
-    width: 30px;
-    height: 30px;
+    right: 12px;
+    width: 44px;
+    height: 44px;
+    border-radius: 16px;
   }
 
   .settings-button svg {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
   }
 
   .brand h1 {
-    font-size: 27px;
-  }
-
-  .brand p {
-    margin-top: 6px;
-    font-size: 16px;
+    font-size: 22px;
   }
 
   .creator-card {
@@ -749,12 +770,12 @@ button {
 }
 
 @media (max-width: 410px) {
-  .brand p {
-    display: none;
+  .brand h1 {
+    font-size: 20px;
   }
 
-  .brand h1 {
-    font-size: 25px;
+  .app-logo-text {
+    font-size: 18px;
   }
 
   .fields-grid {

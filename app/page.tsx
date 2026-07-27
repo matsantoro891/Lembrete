@@ -42,15 +42,6 @@ function endOfToday(): Date {
   return date;
 }
 
-function BellIcon({ size = 36 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M10 21h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function GearIcon() {
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -354,11 +345,12 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-icon"><BellIcon /></div>
-          <div>
-            <h1>Lembrete Voz</h1>
-            <p>Fale. Confirme. Não esqueça.</p>
+          <div className="app-logo" aria-label="Lembrete MS">
+            <span className="app-logo-line" aria-hidden="true" />
+            <span className="app-logo-text">MS</span>
+            <span className="app-logo-line" aria-hidden="true" />
           </div>
+          <h1>Lembrete MS</h1>
         </div>
         <button className="settings-button" type="button" aria-label="Abrir configurações" onClick={() => setShowSettings(true)}>
           <GearIcon />

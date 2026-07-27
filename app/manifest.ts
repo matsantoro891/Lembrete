@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Lembrete Voz",
-    short_name: "Lembrete Voz",
+    name: "Lembrete MS",
+    short_name: "Lembrete MS",
     description: "Fale, confirme e adicione seus lembretes ao Calendário do iPhone.",
     start_url: "/",
     display: "standalone",
