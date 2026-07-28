@@ -2,14 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ALERT_OPTIONS, DEFAULT_ALERT_MINUTES } from "@/lib/alertOptions";
+import {
+  cancelReminderNotification,
+  ensureNotificationPermission,
+  registerNotificationServiceWorker,
+  scheduleReminderNotification,
+  syncReminderNotifications,
+} from "@/lib/notificationClient";
 import { parseReminderText } from "@/lib/parseReminderText";
+import {
+  buildSchedulableReminder,
+  calculateNotificationDate,
+  isNotificationInPast,
+  PAST_ALERT_MESSAGE,
+  toNotificationPayload,
+  resolveNotifyAt,
+  type SchedulableReminder,
+} from "@/lib/reminderNotifications";
 
-type Reminder = {
-  id: string;
-  text: string;
-  startsAt: string;
-  alertMinutes: number;
-  completed: boolean;
+type Reminder = SchedulableReminder & {
   createdAt: string;
 };
 
@@ -95,9 +106,29 @@ export default function Home() {
   const baseTextRef = useRef("");
 
   useEffect(() => {
+    registerNotificationServiceWorker().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) setReminders(JSON.parse(saved) as Reminder[]);
+      if (!saved) return;
+
+      const parsed = JSON.parse(saved) as Array<Partial<Reminder> & { id: string; text: string; startsAt: string }>;
+      setReminders(
+        parsed.map((item) => ({
+          ...buildSchedulableReminder({
+            id: item.id,
+            text: item.text,
+            startsAt: item.startsAt,
+            alertMinutes: item.alertMinutes,
+            notificationId: item.notificationId,
+            notifyAt: item.completed ? null : resolveNotifyAt(item.startsAt, item.alertMinutes),
+            completed: item.completed,
+          }),
+          createdAt: item.createdAt ?? new Date().toISOString(),
+        })),
+      );
     } catch {
       setStatus("Não foi possível carregar os lembretes salvos neste aparelho.");
     }
@@ -109,6 +140,14 @@ export default function Home() {
     } catch {
       // O app continua funcionando mesmo se o armazenamento local estiver indisponível.
     }
+  }, [reminders]);
+
+  useEffect(() => {
+    const payloads = reminders
+      .map(toNotificationPayload)
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+
+    syncReminderNotifications(payloads).catch(() => undefined);
   }, [reminders]);
 
   useEffect(() => {
@@ -252,24 +291,49 @@ export default function Home() {
     return Number.isNaN(result.getTime()) ? null : result;
   }
 
-  function saveReminder(startsAt: Date) {
+  async function saveReminder(startsAt: Date): Promise<"saved" | "updated" | "past-alert"> {
+    const trimmedText = text.trim();
     const existing = reminders.find(
-      (item) => item.text === text.trim() && item.startsAt === startsAt.toISOString() && !item.completed,
+      (item) => item.text === trimmedText && item.startsAt === startsAt.toISOString() && !item.completed,
     );
 
-    if (existing) return;
+    const id = existing?.id ?? crypto.randomUUID();
+    const notificationId = existing?.notificationId ?? id;
+    const notifyAtDate = calculateNotificationDate(startsAt, alertMinutes);
+    const isPast = !notifyAtDate || isNotificationInPast(notifyAtDate);
+    const notifyAt = isPast ? null : notifyAtDate.toISOString();
 
-    const nextReminders: Reminder[] = [
-      ...reminders,
-      {
-        id: crypto.randomUUID(),
-        text: text.trim(),
+    if (existing?.notificationId) {
+      await cancelReminderNotification(existing.notificationId);
+    }
+
+    if (notifyAt) {
+      const permission = await ensureNotificationPermission();
+      if (permission === "granted") {
+        await scheduleReminderNotification({
+          notificationId,
+          title: trimmedText,
+          notifyAt,
+        });
+      }
+    }
+
+    const nextReminder: Reminder = {
+      ...buildSchedulableReminder({
+        id,
+        text: trimmedText,
         startsAt: startsAt.toISOString(),
         alertMinutes,
+        notificationId,
+        notifyAt,
         completed: false,
-        createdAt: new Date().toISOString(),
-      },
-    ];
+      }),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+    };
+
+    const nextReminders = existing
+      ? reminders.map((item) => (item.id === id ? nextReminder : item))
+      : [...reminders, nextReminder];
 
     setReminders(nextReminders);
     try {
@@ -277,16 +341,23 @@ export default function Home() {
     } catch {
       // O evento do calendário ainda será aberto, mesmo sem armazenamento local.
     }
+
+    if (isPast) return "past-alert";
+    return existing ? "updated" : "saved";
   }
 
-  function openCalendar() {
+  async function openCalendar() {
     const startsAt = selectedDateTime();
     if (!startsAt || !text.trim()) {
       setStatus("Preencha o texto, a data e o horário.");
       return;
     }
 
-    saveReminder(startsAt);
+    const result = await saveReminder(startsAt);
+    if (result === "past-alert") {
+      setStatus(PAST_ALERT_MESSAGE);
+    }
+
     const params = new URLSearchParams({
       texto: text.trim(),
       inicio: startsAt.toISOString(),
@@ -325,19 +396,38 @@ export default function Home() {
     setStatus("");
   }
 
-  function completeReminder(id: string) {
+  async function completeReminder(id: string) {
+    const reminder = reminders.find((item) => item.id === id);
+    if (reminder?.notificationId) {
+      await cancelReminderNotification(reminder.notificationId);
+    }
+
     setReminders((current) =>
-      current.map((item) => (item.id === id ? { ...item, completed: true } : item)),
+      current.map((item) =>
+        item.id === id ? { ...item, completed: true, notifyAt: null } : item,
+      ),
     );
   }
 
-  function removeReminder(id: string) {
+  async function removeReminder(id: string) {
+    const reminder = reminders.find((item) => item.id === id);
+    if (reminder?.notificationId) {
+      await cancelReminderNotification(reminder.notificationId);
+    }
+
     setReminders((current) => current.filter((item) => item.id !== id));
   }
 
-  function clearAllReminders() {
+  async function clearAllReminders() {
     if (!reminders.length) return;
     if (!window.confirm("Apagar todos os lembretes salvos neste aparelho?")) return;
+
+    await Promise.all(
+      reminders
+        .filter((item) => item.notificationId)
+        .map((item) => cancelReminderNotification(item.notificationId)),
+    );
+
     setReminders([]);
     setShowSettings(false);
   }
