@@ -1,14 +1,15 @@
 import { DEFAULT_ALERT_MINUTES } from "./alertOptions";
+import { normalizeNotificationId } from "./notificationIds";
 
 export const PAST_ALERT_MESSAGE =
-  "O horário do alerta já passou. O lembrete foi salvo, mas a notificação não foi programada.";
+  "O horário selecionado para o alerta já passou. O lembrete foi salvo, mas a notificação não foi programada.";
 
 export type SchedulableReminder = {
   id: string;
   text: string;
   startsAt: string;
   alertMinutes: number;
-  notificationId: string;
+  notificationId: number;
   notifyAt: string | null;
   completed: boolean;
 };
@@ -48,7 +49,7 @@ export function buildSchedulableReminder(input: {
   text: string;
   startsAt: string;
   alertMinutes?: number | null;
-  notificationId?: string;
+  notificationId?: number | string;
   notifyAt?: string | null;
   completed?: boolean;
 }): SchedulableReminder {
@@ -56,7 +57,7 @@ export function buildSchedulableReminder(input: {
     ? input.alertMinutes
     : DEFAULT_ALERT_MINUTES;
 
-  const notificationId = input.notificationId ?? input.id;
+  const notificationId = normalizeNotificationId(input.notificationId);
   const notifyAt =
     input.notifyAt !== undefined
       ? input.notifyAt
@@ -79,7 +80,8 @@ export function toNotificationPayload(reminder: SchedulableReminder) {
 
   return {
     notificationId: reminder.notificationId,
-    title: reminder.text,
+    body: reminder.text,
     notifyAt: reminder.notifyAt,
+    reminderId: reminder.id,
   };
 }
