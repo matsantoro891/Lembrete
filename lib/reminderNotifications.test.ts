@@ -3,6 +3,7 @@ import {
   calculateNotificationDate,
   hasAlertMinutes,
   isNotificationInPast,
+  PAST_ALERT_MESSAGE,
   resolveNotifyAt,
 } from "./reminderNotifications";
 
@@ -34,5 +35,9 @@ describe("reminderNotifications", () => {
     const now = new Date("2026-11-10T08:00:00");
     expect(resolveNotifyAt("2026-11-10T08:00:00", 10, now)).toBeNull();
     expect(resolveNotifyAt("2026-11-10T08:00:00", 0, now)).toBeNull();
+  });
+
+  it("expõe mensagem para alerta já passado", () => {
+    expect(PAST_ALERT_MESSAGE).toContain("O horário selecionado para o alerta já passou.");
   });
 });

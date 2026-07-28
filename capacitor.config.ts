@@ -9,6 +9,11 @@ const config: CapacitorConfig = {
   ios: {
     contentInset: "automatic",
   },
+  plugins: {
+    LocalNotifications: {
+      presentationOptions: ["badge", "sound", "banner", "list"],
+    },
+  },
   ...(serverUrl
     ? {
         server: {

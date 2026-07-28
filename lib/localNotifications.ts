@@ -192,11 +192,11 @@ export function registerNotificationListeners(
 
     const receivedHandle = await module.LocalNotifications.addListener(
       "localNotificationReceived",
-      (event) => {
-        const reminderId = event.notification.extra?.reminderId;
+      (notification) => {
+        const reminderId = notification.extra?.reminderId;
         callbacks.onReceived?.({
           reminderId: typeof reminderId === "string" ? reminderId : undefined,
-          body: event.notification.body ?? "",
+          body: notification.body ?? "",
         });
       },
     );

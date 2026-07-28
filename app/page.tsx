@@ -638,7 +638,16 @@ export default function Home() {
           </div>
           <h1>Lembrete MS</h1>
         </div>
-        <button className="settings-button" type="button" aria-label="Abrir configurações" onClick={() => setShowSettings(true)}>
+        <button
+          className="settings-button"
+          type="button"
+          aria-label="Abrir configurações"
+          onClick={() => {
+            setSettingsStatus("");
+            setShowSettings(true);
+            refreshNotificationPermission().catch(() => undefined);
+          }}
+        >
           <GearIcon />
         </button>
       </header>
