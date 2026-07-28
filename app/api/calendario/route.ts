@@ -1,6 +1,5 @@
+import { alarmTrigger, isAllowedAlertMinutes } from "@/lib/alertOptions";
 import { NextRequest } from "next/server";
-
-const ALERTAS_PERMITIDOS = new Set([0, 10, 30, 60, 1440]);
 
 function escapeIcsText(value: string): string {
   return value
@@ -12,13 +11,6 @@ function escapeIcsText(value: string): string {
 
 function formatUtc(date: Date): string {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-}
-
-function alarmTrigger(minutes: number): string {
-  if (minutes === 0) return "PT0M";
-  if (minutes === 1440) return "-P1D";
-  if (minutes % 60 === 0) return `-PT${minutes / 60}H`;
-  return `-PT${minutes}M`;
 }
 
 function foldLine(line: string): string {
@@ -61,7 +53,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   if (!texto) return badRequest("Informe o texto do lembrete.");
   if (texto.length > 500) return badRequest("O texto deve ter no máximo 500 caracteres.");
-  if (!ALERTAS_PERMITIDOS.has(aviso)) return badRequest("Antecedência do alerta inválida.");
+  if (!isAllowedAlertMinutes(aviso)) return badRequest("Antecedência do alerta inválida.");
 
   const inicio = new Date(inicioIso);
   if (Number.isNaN(inicio.getTime())) return badRequest("Data ou horário inválido.");
@@ -87,7 +79,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     "BEGIN:VALARM",
     `TRIGGER:${alarmTrigger(aviso)}`,
     "ACTION:DISPLAY",
-    `DESCRIPTION:${escapeIcsText(texto)}`,
+    "DESCRIPTION:Lembrete do compromisso",
     "END:VALARM",
     "END:VEVENT",
     "END:VCALENDAR",

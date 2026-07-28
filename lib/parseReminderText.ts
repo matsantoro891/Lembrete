@@ -1,3 +1,5 @@
+import { DEFAULT_ALERT_MINUTES } from "./alertOptions";
+
 export type ParsedReminder = {
   description: string;
   date: string | null;
@@ -25,8 +27,6 @@ type TimeHit = {
   minutes: number;
   span: MatchSpan;
 };
-
-const DEFAULT_ALERT_MINUTES = 10;
 
 const MONTH_NAMES =
   "janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro";

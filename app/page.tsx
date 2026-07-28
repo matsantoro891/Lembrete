@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ALERT_OPTIONS, DEFAULT_ALERT_MINUTES } from "@/lib/alertOptions";
 import { parseReminderText } from "@/lib/parseReminderText";
 
 type Reminder = {
@@ -83,7 +84,7 @@ export default function Home() {
   const [text, setText] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
-  const [alertMinutes, setAlertMinutes] = useState(10);
+  const [alertMinutes, setAlertMinutes] = useState(DEFAULT_ALERT_MINUTES);
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState("");
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -320,7 +321,7 @@ export default function Home() {
     setText("");
     setDate("");
     setTime("");
-    setAlertMinutes(10);
+    setAlertMinutes(DEFAULT_ALERT_MINUTES);
     setStatus("");
   }
 
@@ -401,11 +402,11 @@ export default function Home() {
           <label className="field field-full">
             <span>Alerta</span>
             <select value={alertMinutes} onChange={(event) => setAlertMinutes(Number(event.target.value))}>
-              <option value={0}>Na hora</option>
-              <option value={10}>10 minutos antes</option>
-              <option value={30}>30 minutos antes</option>
-              <option value={60}>1 hora antes</option>
-              <option value={1440}>1 dia antes</option>
+              {ALERT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
         </div>
