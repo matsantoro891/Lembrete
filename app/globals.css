@@ -598,6 +598,140 @@ button {
   background: #fff4f4;
 }
 
+.settings-section {
+  margin: 28px 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: #f8fbff;
+  text-align: left;
+}
+
+.settings-section h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #5f7390;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.settings-row span {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.settings-toggle {
+  position: relative;
+  width: 54px;
+  height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: #c5d3e5;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.settings-toggle.is-on {
+  background: #2f70be;
+}
+
+.settings-toggle::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s ease;
+}
+
+.settings-toggle.is-on::after {
+  transform: translateX(22px);
+}
+
+.settings-status {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.settings-status strong {
+  color: var(--navy);
+}
+
+.settings-note {
+  margin: 12px 0 0;
+  color: #7d8ea6;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.modal-settings-button {
+  width: 100%;
+  min-height: 54px;
+  margin-bottom: 10px;
+  border: 0;
+  border-radius: 18px;
+  color: var(--navy);
+  background: #edf2f8;
+  font-size: 17px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.reminder-item.is-highlighted {
+  border-color: #2f70be;
+  box-shadow: 0 0 0 3px rgba(47, 112, 190, 0.18);
+}
+
+.reminder-item.is-editing {
+  border-color: #102a50;
+}
+
+.reminder-copy-button {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.foreground-alert {
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border: 1px solid #b9d4f5;
+  border-radius: 20px;
+  background: #eaf2fd;
+  color: var(--navy);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.save-reminder-button {
+  min-height: 58px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--navy);
+  background: white;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
