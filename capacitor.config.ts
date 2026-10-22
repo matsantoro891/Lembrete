@@ -5,7 +5,9 @@ const serverUrl = process.env.CAPACITOR_SERVER_URL;
 const config: CapacitorConfig = {
   appId: "com.lembretems.app",
   appName: "Lembrete MS",
-  webDir: "public",
+  // Ship the actual interface inside the iPhone app, including offline startup.
+  // The old public/index.html only displayed a permanent loading placeholder.
+  webDir: "dist-native",
   ios: {
     contentInset: "automatic",
   },

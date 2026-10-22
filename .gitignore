@@ -9,6 +9,7 @@
 
 # production
 /build
+/dist-native/
 
 # misc
 .DS_Store
