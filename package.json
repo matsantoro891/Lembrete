@@ -5,11 +5,12 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:native": "vite build --config vite.native.config.mts",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "cap:sync": "cap sync",
-    "cap:sync:ios": "cap sync ios",
+    "cap:sync": "npm run build:native && cap sync",
+    "cap:sync:ios": "npm run build:native && cap sync ios",
     "cap:open:ios": "cap open ios"
   },
   "dependencies": {
@@ -26,9 +27,10 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.0",
+    "vite": "7.3.6",
     "vitest": "^3.2.4"
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.12.0"
   }
 }

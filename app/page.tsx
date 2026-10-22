@@ -3,17 +3,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ALERT_OPTIONS, DEFAULT_ALERT_MINUTES } from "@/lib/alertOptions";
 import {
+  cancelAllReminderNotifications,
   cancelReminderNotification,
   checkNotificationPermission,
   ensureNotificationPermissionForReminder,
   registerNotificationListeners,
   requestNotificationPermission,
-  scheduleReminderNotification,
   scheduleTestNotification,
   syncReminderNotifications,
   type NotificationPermissionStatus,
 } from "@/lib/localNotifications";
-import { createNotificationId, getTestNotificationId } from "@/lib/notificationIds";
+import { getTestNotificationId } from "@/lib/notificationIds";
+import { completeAppleReminder, isAppleRemindersAvailable, openAppleCalendarEvent, removeAppleReminder, saveAppleReminder } from "@/lib/appleReminders";
+import { readReminders, STORAGE_KEY, upsertReminder, writeReminders, type Reminder } from "@/lib/reminders";
+import { isAppleMobileWeb, reminderShareData, shareReminderToIPhone, type ShareReminderResult } from "@/lib/shareReminder";
 import { parseReminderText } from "@/lib/parseReminderText";
 import {
   isNativePlatform,
@@ -22,24 +25,15 @@ import {
   WEB_NOTIFICATIONS_MESSAGE,
 } from "@/lib/platform";
 import {
-  buildSchedulableReminder,
-  calculateNotificationDate,
-  isNotificationInPast,
   PAST_ALERT_MESSAGE,
   toNotificationPayload,
-  resolveNotifyAt,
-  type SchedulableReminder,
 } from "@/lib/reminderNotifications";
-
-type Reminder = SchedulableReminder & {
-  createdAt: string;
-};
 
 type Tab = "today" | "upcoming" | "late";
 
-const STORAGE_KEY = "lembrete-voz-reminders-v1";
 const CALENDAR_TIP_KEY = "lembrete-voz-calendar-tip-seen";
 const NOTIFICATIONS_ENABLED_KEY = "lembrete-ms-notifications-enabled";
+const APPLE_REMINDERS_ENABLED_KEY = "lembrete-ms-apple-reminders-enabled";
 const AUTO_PARSE_STATUS =
   "Data e horário identificados automaticamente. Revise antes de salvar.";
 
@@ -47,7 +41,7 @@ function formatPermissionStatus(status: NotificationPermissionStatus): string {
   if (status === "granted") return "Permitidas";
   if (status === "denied") return "Não permitidas";
   if (status === "prompt") return "Não solicitadas";
-  return "Indisponíveis nesta versão";
+  return "Avisos com o aplicativo aberto";
 }
 
 function startsAtToFields(startsAt: string): { date: string; time: string } {
@@ -136,14 +130,29 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
   const [highlightedReminderId, setHighlightedReminderId] = useState<string | null>(null);
-  const [foregroundAlert, setForegroundAlert] = useState("");
+  const [foregroundAlerts, setForegroundAlerts] = useState<Array<{ text: string; reminderId?: string }>>([]);
+  const foregroundAlert = foregroundAlerts[0] ?? null;
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermissionStatus>("unsupported");
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [saveToApple, setSaveToApple] = useState(true);
+  const [appleDevice, setAppleDevice] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [notificationNotice, setNotificationNotice] = useState("");
+  const [shareFallback, setShareFallback] = useState<Reminder | null>(null);
+  const [clockTick, setClockTick] = useState(0);
   const [settingsStatus, setSettingsStatus] = useState("");
   const recognitionRef = useRef<any>(null);
   const baseTextRef = useRef("");
   const remindersRef = useRef<Reminder[]>([]);
+  const busyRef = useRef(false);
+
+  function commitReminders(next: Reminder[]) {
+    writeReminders(window.localStorage, next);
+    remindersRef.current = next;
+    setReminders(next);
+  }
 
   async function refreshNotificationPermission() {
     const status = await checkNotificationPermission();
@@ -175,11 +184,16 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      setNotificationsEnabled(window.localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) === "1");
+      const saved = readReminders(window.localStorage);
+      remindersRef.current = saved;
+      setReminders(saved);
+      setNotificationsEnabled(window.localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== "0");
+      setSaveToApple(window.localStorage.getItem(APPLE_REMINDERS_ENABLED_KEY) !== "0");
+      setStorageReady(true);
     } catch {
-      setNotificationsEnabled(false);
+      setStatus("Não foi possível carregar os lembretes deste aparelho. Os dados existentes foram preservados. Libere o armazenamento e reabra o aplicativo.");
     }
-
+    setAppleDevice(isAppleMobileWeb() || isAppleRemindersAvailable());
     refreshNotificationPermission().catch(() => undefined);
   }, []);
 
@@ -188,8 +202,8 @@ export default function Home() {
       onAction: (reminderId) => {
         focusReminder(reminderId);
       },
-      onReceived: ({ body }) => {
-        setForegroundAlert(body ? `Lembrete MS: ${body}` : "Lembrete MS");
+      onReceived: ({ body, reminderId }) => {
+        setForegroundAlerts((current) => [...current, { text: body || "Você tem um lembrete.", reminderId }]);
       },
     });
 
@@ -197,51 +211,59 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    remindersRef.current = reminders;
-  }, [reminders]);
+    if (!storageReady) return;
+    let active = true;
+    async function sync() {
+      try {
+        if (!notificationsEnabled) {
+          await cancelAllReminderNotifications();
+          if (active) setNotificationNotice("");
+          return;
+        }
+        const result = await syncReminderNotifications(reminders
+          .map(toNotificationPayload)
+          .filter((item): item is NonNullable<typeof item> => item !== null));
+        if (active) setNotificationNotice(result.reason === "permission"
+          ? "Permita as notificações nas Configurações para receber os avisos do Lembrete MS."
+          : result.deferred > 0
+            ? `${result.deferred} lembrete(s) salvo(s) ainda sem notificação: o iPhone limita os avisos pendentes. Os mais próximos foram programados. Reabra o aplicativo para programar os restantes.`
+            : "");
+      } catch {
+        if (active) setNotificationNotice("Os lembretes estão salvos, mas houve uma falha ao atualizar os avisos. Abra Configurações e tente ativar as notificações novamente.");
+      }
+    }
+    void sync();
+    return () => { active = false; };
+  }, [reminders, notificationsEnabled, notificationPermission, storageReady, clockTick]);
 
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (!saved) return;
-
-      const parsed = JSON.parse(saved) as Array<Partial<Reminder> & { id: string; text: string; startsAt: string }>;
-      setReminders(
-        parsed.map((item) => ({
-          ...buildSchedulableReminder({
-            id: item.id,
-            text: item.text,
-            startsAt: item.startsAt,
-            alertMinutes: item.alertMinutes,
-            notificationId: item.notificationId,
-            notifyAt: item.completed ? null : resolveNotifyAt(item.startsAt, item.alertMinutes),
-            completed: item.completed,
-          }),
-          createdAt: item.createdAt ?? new Date().toISOString(),
-        })),
-      );
-    } catch {
-      setStatus("Não foi possível carregar os lembretes salvos neste aparelho.");
-    }
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshNotificationPermission().catch(() => undefined);
+      setClockTick((value) => value + 1);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    // A second open tab must not retain alerts for a deleted or edited reminder.
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY && event.key !== NOTIFICATIONS_ENABLED_KEY && event.key !== APPLE_REMINDERS_ENABLED_KEY) return;
+      try {
+        const next = readReminders(window.localStorage);
+        remindersRef.current = next;
+        setReminders(next);
+        setNotificationsEnabled(window.localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== "0");
+        setSaveToApple(window.localStorage.getItem(APPLE_REMINDERS_ENABLED_KEY) !== "0");
+      } catch {
+        setStatus("Não foi possível atualizar os lembretes alterados em outra aba.");
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reminders));
-    } catch {
-      // O app continua funcionando mesmo se o armazenamento local estiver indisponível.
-    }
-  }, [reminders]);
-
-  useEffect(() => {
-    if (!isNativePlatform()) return;
-
-    const payloads = reminders
-      .map(toNotificationPayload)
-      .filter((item): item is NonNullable<typeof item> => item !== null);
-
-    syncReminderNotifications(payloads).catch(() => undefined);
-  }, [reminders]);
 
   useEffect(() => {
     return () => {
@@ -262,13 +284,14 @@ export default function Home() {
       upcoming: active.filter((item) => new Date(item.startsAt) > todayEnd),
       late: active.filter((item) => new Date(item.startsAt) < todayStart),
     };
-  }, [reminders]);
+  }, [reminders, clockTick]);
 
   const visibleReminders = grouped[activeTab].sort(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
   );
 
-  const canAdd = text.trim().length > 0 && Boolean(date) && Boolean(time);
+  const editingAppleLinked = Boolean(editingReminderId && reminders.find((item) => item.id === editingReminderId)?.appleReminderId);
+  const canAdd = storageReady && !isSaving && text.trim().length > 0 && Boolean(date) && Boolean(time);
 
   function applyParsedReminder(
     value: string,
@@ -384,129 +407,158 @@ export default function Home() {
     return Number.isNaN(result.getTime()) ? null : result;
   }
 
-  async function persistReminder(startsAt: Date): Promise<"saved" | "updated" | "past-alert"> {
-    const trimmedText = text.trim();
-    const existing = editingReminderId
-      ? reminders.find((item) => item.id === editingReminderId)
-      : reminders.find(
-          (item) =>
-            item.text === trimmedText &&
-            item.startsAt === startsAt.toISOString() &&
-            !item.completed,
-        );
-
-    const id = existing?.id ?? crypto.randomUUID();
-    const notificationId = existing?.notificationId ?? createNotificationId();
-    const notifyAtDate = calculateNotificationDate(startsAt, alertMinutes);
-    const isPast = !notifyAtDate || isNotificationInPast(notifyAtDate);
-    const notifyAt = isPast ? null : notifyAtDate.toISOString();
-
-    if (existing?.notificationId) {
-      await cancelReminderNotification(existing.notificationId);
-    }
-
-    if (notifyAt && isNativePlatform()) {
-      const { status, deniedMessage } = await ensureNotificationPermissionForReminder();
-      await refreshNotificationPermission();
-
-      if (status === "granted") {
-        await scheduleReminderNotification({
-          notificationId,
-          body: trimmedText,
-          notifyAt,
-          reminderId: id,
-        });
-      } else if (deniedMessage) {
-        setStatus(deniedMessage);
-      }
-    }
-
-    const nextReminder: Reminder = {
-      ...buildSchedulableReminder({
-        id,
-        text: trimmedText,
-        startsAt: startsAt.toISOString(),
-        alertMinutes,
-        notificationId,
-        notifyAt,
-        completed: false,
-      }),
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
-    };
-
-    const nextReminders = existing
-      ? reminders.map((item) => (item.id === id ? nextReminder : item))
-      : [...reminders, nextReminder];
-
-    setReminders(nextReminders);
+  function persistReminder(startsAt: Date) {
+    const result = upsertReminder(remindersRef.current, {
+      text, startsAt, alertMinutes, editingId: editingReminderId,
+    });
+    commitReminders(result.reminders);
     setEditingReminderId(null);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextReminders));
-    } catch {
-      // O lembrete continua salvo na memória do aplicativo.
-    }
+    return result;
+  }
 
-    if (isPast) return "past-alert";
-    return existing ? "updated" : "saved";
+  async function updateSavedReminderNotification(reminder: Reminder): Promise<string> {
+    if (!notificationsEnabled) return "Avisos do aplicativo desativados nas Configurações.";
+    try {
+      if (!reminder.notifyAt) {
+        await cancelReminderNotification(reminder.notificationId);
+        return PAST_ALERT_MESSAGE;
+      }
+      if (isNativePlatform()) {
+        const permission = await ensureNotificationPermissionForReminder();
+        setNotificationPermission(permission.status);
+        if (permission.status !== "granted") return permission.deniedMessage ?? PERMISSION_DENIED_MESSAGE;
+      }
+      const result = await syncReminderNotifications(remindersRef.current
+        .map(toNotificationPayload)
+        .filter((item): item is NonNullable<typeof item> => item !== null));
+      if (result.reason === "permission") return PERMISSION_DENIED_MESSAGE;
+      if (result.deferredReminderIds.includes(reminder.id)) {
+        return "O lembrete foi salvo, mas o limite de notificações pendentes do iPhone foi atingido. Reabra o aplicativo depois dos próximos avisos para programar este lembrete.";
+      }
+      return result.mode === "native"
+        ? `Notificação programada para ${formatReminderDate(reminder.notifyAt)}.`
+        : `Aviso programado para ${formatReminderDate(reminder.notifyAt)}, enquanto o aplicativo estiver aberto.`;
+    } catch {
+      return "O lembrete está salvo, mas não foi possível programar o aviso. Tente ativar as notificações nas Configurações.";
+    }
+  }
+
+  async function saveNativeAppleReminder(reminder: Reminder): Promise<string> {
+    try {
+      const result = await saveAppleReminder(reminder);
+      const next = remindersRef.current.map((item) => item.id === reminder.id
+        ? { ...item, appleReminderId: result.identifier } : item);
+      commitReminders(next);
+      return result.created ? "Salvo também no Lembretes do iPhone." : "Atualizado também no Lembretes do iPhone.";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível salvar no Lembretes do iPhone.";
+      return `O lembrete permanece salvo neste aplicativo. ${message}`;
+    }
+  }
+
+  function shareResultMessage(result: ShareReminderResult, reminder: Reminder): string {
+    if (result === "shared") return "Compartilhamento concluído. Confira se você adicionou o item no Lembretes do iPhone e ajustou a data e o alerta.";
+    if (result === "cancelled") return "Compartilhamento cancelado; o lembrete continua salvo neste aplicativo.";
+    setShareFallback(reminder);
+    return "O lembrete está salvo. Use as opções abaixo para enviá-lo ao Lembretes do iPhone.";
   }
 
   async function handleSaveReminder() {
+    if (busyRef.current) return;
     const startsAt = selectedDateTime();
-    if (!startsAt || !text.trim()) {
+    if (!storageReady || !startsAt || !text.trim()) {
       setStatus("Preencha o texto, a data e o horário.");
       return;
     }
-
-    const wasEditing = Boolean(editingReminderId);
-    const result = await persistReminder(startsAt);
-    if (result === "past-alert") {
-      setStatus(PAST_ALERT_MESSAGE);
-      return;
+    busyRef.current = true;
+    setIsSaving(true);
+    try {
+      // Persist synchronously. Keep navigator.share in this same user gesture.
+      const result = persistReminder(startsAt);
+      const baseMessage = result.updated ? "Lembrete atualizado." : "Lembrete salvo.";
+      setStatus(baseMessage);
+      const shouldSaveToApple = (saveToApple || Boolean(result.reminder.appleReminderId)) && appleDevice;
+      const webShare = shouldSaveToApple && !isNativePlatform()
+        ? shareReminderToIPhone(result.reminder) : null;
+      const notificationMessage = await updateSavedReminderNotification(result.reminder);
+      let appleMessage = "";
+      if (shouldSaveToApple && isNativePlatform()) {
+        appleMessage = await saveNativeAppleReminder(result.reminder);
+      } else if (webShare) {
+        appleMessage = shareResultMessage(await webShare, result.reminder);
+      }
+      setStatus([baseMessage, notificationMessage, appleMessage].filter(Boolean).join(" "));
+    } catch {
+      setStatus("Não foi possível salvar neste aparelho. Verifique o armazenamento e tente novamente; o texto continua preenchido.");
+    } finally {
+      busyRef.current = false;
+      setIsSaving(false);
     }
-
-    setStatus(wasEditing || result === "updated" ? "Lembrete atualizado." : "Lembrete salvo.");
   }
 
   async function openCalendar() {
+    if (busyRef.current) return;
     const startsAt = selectedDateTime();
-    if (!startsAt || !text.trim()) {
+    if (!storageReady || !startsAt || !text.trim()) {
       setStatus("Preencha o texto, a data e o horário.");
       return;
     }
-
-    const result = await persistReminder(startsAt);
-    if (result === "past-alert") {
-      setStatus(PAST_ALERT_MESSAGE);
+    busyRef.current = true;
+    setIsSaving(true);
+    let locallySaved = false;
+    try {
+      const { reminder } = persistReminder(startsAt);
+      locallySaved = true;
+      const notificationMessage = await updateSavedReminderNotification(reminder);
+      if (isNativePlatform()) {
+        const appleMessage = reminder.appleReminderId ? await saveNativeAppleReminder(reminder) : "";
+        const result = await openAppleCalendarEvent(reminder);
+        setStatus(`${result.saved ? "Lembrete salvo no aplicativo e evento adicionado ao Calendário." : "Lembrete salvo no aplicativo. Inclusão no Calendário cancelada."} ${notificationMessage} ${appleMessage}`);
+      } else {
+        setStatus(`Lembrete salvo. ${notificationMessage}`);
+        const params = new URLSearchParams({
+          texto: reminder.text, inicio: reminder.startsAt, aviso: String(reminder.alertMinutes),
+        });
+        window.location.assign(`/api/calendario?${params.toString()}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível abrir o Calendário.";
+      setStatus(locallySaved ? `O lembrete permanece salvo neste aplicativo. ${message}`
+        : "Não foi possível salvar neste aparelho. Verifique o armazenamento e tente novamente.");
+    } finally {
+      busyRef.current = false;
+      setIsSaving(false);
     }
-
-    const params = new URLSearchParams({
-      texto: text.trim(),
-      inicio: startsAt.toISOString(),
-      aviso: String(alertMinutes),
-    });
-
-    window.location.assign(`/api/calendario?${params.toString()}`);
   }
 
   function handleAddCalendar() {
     if (!canAdd) return;
-
-    const alreadySawTip = window.localStorage.getItem(CALENDAR_TIP_KEY) === "1";
-    if (!alreadySawTip) {
-      setShowCalendarTip(true);
-      return;
-    }
-
-    openCalendar();
+    try {
+      if (window.localStorage.getItem(CALENDAR_TIP_KEY) !== "1") {
+        setShowCalendarTip(true);
+        return;
+      }
+    } catch { /* The explanatory sheet remains available when storage is blocked. */ }
+    void openCalendar();
   }
 
   function confirmCalendarTip() {
-    window.localStorage.setItem(CALENDAR_TIP_KEY, "1");
+    try { window.localStorage.setItem(CALENDAR_TIP_KEY, "1"); } catch { /* Nonessential preference. */ }
     setShowCalendarTip(false);
-    openCalendar();
+    void openCalendar();
+  }
+
+  function changeAppleSavePreference(enabled: boolean) {
+    try {
+      window.localStorage.setItem(APPLE_REMINDERS_ENABLED_KEY, enabled ? "1" : "0");
+      setSaveToApple(enabled);
+    } catch {
+      setStatus("Não foi possível guardar a preferência neste aparelho.");
+    }
   }
 
   function clearForm() {
+    if (busyRef.current) return;
     const hasContent = Boolean(text || date || time);
     if (hasContent && !window.confirm("Limpar o lembrete atual e começar outro?")) return;
     recognitionRef.current?.abort?.();
@@ -519,6 +571,7 @@ export default function Home() {
   }
 
   function beginEditReminder(reminder: Reminder) {
+    if (busyRef.current) return;
     const fields = startsAtToFields(reminder.startsAt);
     setText(reminder.text);
     setDate(fields.date);
@@ -530,101 +583,126 @@ export default function Home() {
   }
 
   async function handleToggleNotifications() {
-    if (!isNativePlatform()) {
-      setSettingsStatus(WEB_NOTIFICATIONS_MESSAGE);
-      return;
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setIsSaving(true);
+    try {
+      const nextEnabled = !notificationsEnabled;
+      window.localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, nextEnabled ? "1" : "0");
+      setNotificationsEnabled(nextEnabled);
+      if (!nextEnabled) {
+        await cancelAllReminderNotifications();
+        setForegroundAlerts([]);
+        setSettingsStatus("Avisos do Lembrete MS desativados e agendamentos cancelados. Os avisos já salvos no Calendário ou no Lembretes da Apple são independentes.");
+        return;
+      }
+      if (isNativePlatform()) {
+        const permission = await requestNotificationPermission();
+        setNotificationPermission(permission.status);
+        if (permission.status !== "granted") {
+          setSettingsStatus(permission.deniedMessage ?? PERMISSION_DENIED_MESSAGE);
+          return;
+        }
+      }
+      const result = await syncReminderNotifications(remindersRef.current
+        .map(toNotificationPayload)
+        .filter((item): item is NonNullable<typeof item> => item !== null));
+      setSettingsStatus(result.deferred > 0
+        ? `${result.scheduled} aviso(s) programado(s); ${result.deferred} aguardam vaga no limite do iPhone. Reabra o aplicativo após os próximos avisos.`
+        : isNativePlatform() ? "Notificações ativadas. Os lembretes futuros foram programados." : WEB_NOTIFICATIONS_MESSAGE);
+    } catch {
+      setSettingsStatus("Não foi possível atualizar os avisos. Tente novamente.");
+    } finally {
+      busyRef.current = false;
+      setIsSaving(false);
     }
-
-    const nextEnabled = !notificationsEnabled;
-    setNotificationsEnabled(nextEnabled);
-    window.localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, nextEnabled ? "1" : "0");
-
-    if (!nextEnabled) {
-      setSettingsStatus("Notificações desativadas neste aplicativo.");
-      return;
-    }
-
-    const current = await refreshNotificationPermission();
-    if (current === "denied") {
-      setSettingsStatus(PERMISSION_DENIED_MESSAGE);
-      return;
-    }
-
-    if (current === "granted") {
-      setSettingsStatus("Notificações ativadas.");
-      return;
-    }
-
-    const { status, deniedMessage } = await requestNotificationPermission();
-    await refreshNotificationPermission();
-
-    if (status === "granted") {
-      setSettingsStatus("Notificações ativadas.");
-      return;
-    }
-
-    setSettingsStatus(deniedMessage ?? PERMISSION_DENIED_MESSAGE);
   }
 
   async function handleTestNotification() {
-    if (!isNativePlatform()) {
-      setSettingsStatus(WEB_NOTIFICATIONS_MESSAGE);
+    if (busyRef.current) return;
+    if (!notificationsEnabled) {
+      setSettingsStatus("Ative os avisos antes de testar.");
       return;
     }
-
-    const current = await refreshNotificationPermission();
-    if (current === "denied") {
-      setSettingsStatus(PERMISSION_DENIED_MESSAGE);
-      return;
-    }
-
-    if (current !== "granted") {
-      const { status, deniedMessage } = await requestNotificationPermission();
-      await refreshNotificationPermission();
-      if (status !== "granted") {
-        setSettingsStatus(deniedMessage ?? PERMISSION_DENIED_MESSAGE);
-        return;
+    busyRef.current = true;
+    setIsSaving(true);
+    try {
+      if (isNativePlatform()) {
+        const permission = await requestNotificationPermission();
+        setNotificationPermission(permission.status);
+        if (permission.status !== "granted") {
+          setSettingsStatus(permission.deniedMessage ?? PERMISSION_DENIED_MESSAGE);
+          return;
+        }
       }
+      const result = await scheduleTestNotification(getTestNotificationId());
+      setSettingsStatus(result.scheduled
+        ? (result.mode === "native" ? TEST_NOTIFICATION_SCHEDULED_MESSAGE : "Aviso de teste em 10 segundos. Mantenha esta tela aberta.")
+        : result.reason === "limit" ? "O limite de notificações pendentes foi atingido. Libere um aviso antes de testar." : PERMISSION_DENIED_MESSAGE);
+    } catch {
+      setSettingsStatus("Não foi possível programar o teste de notificação.");
+    } finally {
+      busyRef.current = false;
+      setIsSaving(false);
     }
-
-    await scheduleTestNotification(getTestNotificationId());
-    setSettingsStatus(TEST_NOTIFICATION_SCHEDULED_MESSAGE);
   }
 
-  async function completeReminder(id: string) {
-    const reminder = reminders.find((item) => item.id === id);
-    if (reminder?.notificationId) {
+  async function changeReminderState(id: string, action: "complete" | "remove") {
+    if (busyRef.current) return;
+    const reminder = remindersRef.current.find((item) => item.id === id);
+    if (!reminder) return;
+    busyRef.current = true;
+    setIsSaving(true);
+    let locallySaved = false;
+    try {
+      commitReminders(action === "remove"
+        ? remindersRef.current.filter((item) => item.id !== id)
+        : remindersRef.current.map((item) => item.id === id ? { ...item, completed: true, notifyAt: null } : item));
+      locallySaved = true;
+      if (editingReminderId === id) setEditingReminderId(null);
+      setForegroundAlerts((current) => current.filter((item) => item.reminderId !== id));
       await cancelReminderNotification(reminder.notificationId);
+      if (reminder.appleReminderId && isAppleRemindersAvailable()) {
+        if (action === "complete") await completeAppleReminder(reminder);
+        else await removeAppleReminder(reminder);
+      }
+      setStatus(action === "complete" ? "Lembrete concluído; aviso cancelado." : "Lembrete excluído; aviso cancelado.");
+    } catch {
+      setStatus(locallySaved
+        ? "O lembrete foi atualizado neste aplicativo, mas houve uma falha ao atualizar os avisos ou o Lembretes do iPhone. Confira os Ajustes e o app Lembretes."
+        : "Não foi possível gravar a alteração neste aparelho. O lembrete foi preservado.");
+    } finally {
+      busyRef.current = false;
+      setIsSaving(false);
     }
-
-    setReminders((current) =>
-      current.map((item) =>
-        item.id === id ? { ...item, completed: true, notifyAt: null } : item,
-      ),
-    );
-  }
-
-  async function removeReminder(id: string) {
-    const reminder = reminders.find((item) => item.id === id);
-    if (reminder?.notificationId) {
-      await cancelReminderNotification(reminder.notificationId);
-    }
-
-    setReminders((current) => current.filter((item) => item.id !== id));
   }
 
   async function clearAllReminders() {
-    if (!reminders.length) return;
-    if (!window.confirm("Apagar todos os lembretes salvos neste aparelho?")) return;
-
-    await Promise.all(
-      reminders
-        .filter((item) => item.notificationId)
-        .map((item) => cancelReminderNotification(item.notificationId)),
-    );
-
-    setReminders([]);
-    setShowSettings(false);
+    if (busyRef.current || !storageReady || !remindersRef.current.length) return;
+    if (!window.confirm("Apagar todos os lembretes deste aparelho e suas cópias criadas no Lembretes do iPhone? Os eventos do Calendário serão mantidos.")) return;
+    busyRef.current = true;
+    setIsSaving(true);
+    const previous = remindersRef.current;
+    let locallySaved = false;
+    try {
+      commitReminders([]);
+      locallySaved = true;
+      setEditingReminderId(null);
+      setForegroundAlerts([]);
+      await cancelAllReminderNotifications();
+      const results = await Promise.allSettled(previous.filter((item) => item.appleReminderId && isAppleRemindersAvailable())
+        .map((item) => removeAppleReminder(item)));
+      setSettingsStatus(results.some((result) => result.status === "rejected")
+        ? "Lembretes locais apagados. Algumas cópias no Lembretes do iPhone não puderam ser removidas; confira o aplicativo da Apple."
+        : "Lembretes apagados e avisos cancelados.");
+    } catch {
+      setSettingsStatus(locallySaved
+        ? "Lembretes locais apagados, mas houve uma falha ao cancelar os avisos ou atualizar o Lembretes do iPhone."
+        : "Não foi possível apagar os lembretes; os dados existentes foram preservados.");
+    } finally {
+      busyRef.current = false;
+      setIsSaving(false);
+    }
   }
 
   return (
@@ -652,6 +730,18 @@ export default function Home() {
         </button>
       </header>
 
+      {foregroundAlert ? (
+        <aside className="reminder-alert" role="alert" aria-live="assertive">
+          <button type="button" className="reminder-alert-content" onClick={() => {
+            if (foregroundAlert.reminderId) focusReminder(foregroundAlert.reminderId);
+          }}>
+            <strong>Agora · Lembrete MS{foregroundAlerts.length > 1 ? ` · 1 de ${foregroundAlerts.length}` : ""}</strong>
+            <span>{foregroundAlert.text}</span>
+          </button>
+          <button className="reminder-alert-close" type="button" aria-label="Fechar aviso" onClick={() => setForegroundAlerts((current) => current.slice(1))}>×</button>
+        </aside>
+      ) : null}
+
       <section className="creator-card" aria-labelledby="creator-label">
         <div className="creator-decoration creator-decoration-one" />
         <div className="creator-decoration creator-decoration-two" />
@@ -660,6 +750,7 @@ export default function Home() {
         <button
           type="button"
           className={`microphone-button ${isListening ? "is-listening" : ""}`}
+          disabled={isSaving}
           onClick={isListening ? stopListening : startListening}
           aria-pressed={isListening}
         >
@@ -672,6 +763,7 @@ export default function Home() {
           id="reminder-text"
           className="reminder-textarea"
           value={text}
+          disabled={isSaving}
           onChange={(event) => {
             const value = event.target.value;
             setText(value);
@@ -682,24 +774,20 @@ export default function Home() {
           aria-label="Texto do lembrete"
         />
 
-        {foregroundAlert ? (
-          <p className="foreground-alert" role="status">{foregroundAlert}</p>
-        ) : null}
-
         {status ? <p className="status-message" role="status">{status}</p> : null}
 
         <div className="fields-grid">
           <label className="field">
             <span>Data</span>
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+            <input type="date" value={date} disabled={isSaving} onChange={(event) => setDate(event.target.value)} />
           </label>
           <label className="field">
             <span>Horário</span>
-            <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
+            <input type="time" value={time} disabled={isSaving} onChange={(event) => setTime(event.target.value)} />
           </label>
           <label className="field field-full">
             <span>Alerta</span>
-            <select value={alertMinutes} onChange={(event) => setAlertMinutes(Number(event.target.value))}>
+            <select value={alertMinutes} disabled={isSaving} onChange={(event) => setAlertMinutes(Number(event.target.value))}>
               {ALERT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -709,15 +797,34 @@ export default function Home() {
           </label>
         </div>
 
+        <p className="notification-mode">
+          {!notificationsEnabled ? "Avisos do aplicativo desativados. Ative nas Configurações." : isNativePlatform()
+            ? "O Lembrete MS avisa no horário do alerta, inclusive com o aplicativo fechado, após você permitir as notificações."
+            : WEB_NOTIFICATIONS_MESSAGE}
+        </p>
+        {notificationNotice ? <p className="notification-warning" role="status">{notificationNotice}</p> : null}
+
+        {appleDevice ? (
+          <div className="apple-save-option">
+            <label>
+              <input type="checkbox" checked={saveToApple || editingAppleLinked} disabled={isSaving || editingAppleLinked} onChange={(event) => changeAppleSavePreference(event.target.checked)} />
+              <span>{editingAppleLinked ? "Atualizar também no Lembretes do iPhone" : "Salvar também no Lembretes do iPhone"}</span>
+            </label>
+            <p>{isNativePlatform()
+              ? "O título, a data e o alerta serão preenchidos após sua autorização. Lembretes já vinculados são atualizados automaticamente."
+              : "Ao salvar, escolha Lembretes na tela de compartilhamento. Confira a data, o horário e o alerta antes de adicionar."}</p>
+          </div>
+        ) : null}
+
         <div className="creator-actions">
           <button className="save-reminder-button" type="button" disabled={!canAdd} onClick={handleSaveReminder}>
-            {editingReminderId ? "Atualizar lembrete" : "Salvar lembrete"}
+            {isSaving ? "Salvando…" : editingReminderId ? "Atualizar lembrete" : "Salvar lembrete"}
           </button>
           <button className="calendar-button" type="button" disabled={!canAdd} onClick={handleAddCalendar}>
             <CalendarIcon />
             <span>Adicionar ao Calendário</span>
           </button>
-          <button className="new-reminder-button" type="button" onClick={clearForm}>Novo lembrete</button>
+          <button className="new-reminder-button" type="button" disabled={isSaving} onClick={clearForm}>Novo lembrete</button>
         </div>
       </section>
 
@@ -751,7 +858,7 @@ export default function Home() {
                 className={`reminder-item ${highlightedReminderId === reminder.id ? "is-highlighted" : ""} ${editingReminderId === reminder.id ? "is-editing" : ""}`}
                 key={reminder.id}
               >
-                <button className="complete-button" type="button" aria-label={`Concluir ${reminder.text}`} onClick={() => completeReminder(reminder.id)} />
+                <button className="complete-button" type="button" disabled={isSaving} aria-label={`Concluir ${reminder.text}`} onClick={() => changeReminderState(reminder.id, "complete")} />
                 <button
                   className="reminder-copy-button"
                   type="button"
@@ -763,7 +870,7 @@ export default function Home() {
                     <p>{formatReminderDate(reminder.startsAt)}</p>
                   </div>
                 </button>
-                <button className="delete-button" type="button" onClick={() => removeReminder(reminder.id)} aria-label={`Excluir ${reminder.text}`}>×</button>
+                <button className="delete-button" type="button" disabled={isSaving} onClick={() => changeReminderState(reminder.id, "remove")} aria-label={`Excluir ${reminder.text}`}>×</button>
               </article>
             ))}
           </div>
@@ -784,6 +891,31 @@ export default function Home() {
         </div>
       ) : null}
 
+      {shareFallback ? (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="share-title">
+            <h2 id="share-title">Lembrete salvo</h2>
+            <p>Para salvar também no iPhone, toque em Compartilhar e escolha <strong>Lembretes</strong>. Confira a data, o horário e o alerta antes de adicionar. Se a opção não aparecer, copie o texto e cole no app Lembretes.</p>
+            <button type="button" className="modal-primary" onClick={async () => {
+              const reminder = shareFallback;
+              const result = await shareReminderToIPhone(reminder);
+              if (result !== "unavailable") setShareFallback(null);
+              setStatus(shareResultMessage(result, reminder));
+            }}>Compartilhar com Lembretes</button>
+            <button type="button" className="modal-secondary" onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(reminderShareData(shareFallback).text ?? shareFallback.text);
+                setStatus("Texto copiado. Cole no app Lembretes e ajuste a data, o horário e o alerta.");
+                setShareFallback(null);
+              } catch {
+                setStatus("Não foi possível copiar automaticamente. O texto do lembrete continua disponível no formulário.");
+              }
+            }}>Copiar texto do lembrete</button>
+            <button type="button" className="modal-secondary" onClick={() => setShareFallback(null)}>Fechar</button>
+          </div>
+        </div>
+      ) : null}
+
       {showSettings ? (
         <div className="modal-backdrop" role="presentation">
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -793,42 +925,36 @@ export default function Home() {
             <section className="settings-section" aria-labelledby="notifications-settings-title">
               <h3 id="notifications-settings-title">Notificações</h3>
 
-              {isNativePlatform() ? (
-                <>
-                  <div className="settings-row">
-                    <span>Ativar notificações</span>
-                    <button
-                      type="button"
-                      className={`settings-toggle ${notificationsEnabled ? "is-on" : ""}`}
-                      role="switch"
-                      aria-checked={notificationsEnabled}
-                      aria-label="Ativar notificações"
-                      onClick={handleToggleNotifications}
-                    />
-                  </div>
+              <div className="settings-row">
+                <span>{isNativePlatform() ? "Ativar notificações" : "Ativar avisos neste aplicativo"}</span>
+                <button
+                  type="button"
+                  className={`settings-toggle ${notificationsEnabled ? "is-on" : ""}`}
+                  role="switch"
+                  aria-checked={notificationsEnabled}
+                  aria-label="Ativar notificações"
+                  disabled={isSaving || !storageReady}
+                  onClick={handleToggleNotifications}
+                />
+              </div>
 
-                  <p className="settings-status">
-                    Status: <strong>{formatPermissionStatus(notificationPermission)}</strong>
-                  </p>
+              <p className="settings-status">
+                Status: <strong>{notificationsEnabled ? formatPermissionStatus(notificationPermission) : "Desativadas"}</strong>
+              </p>
 
-                  <button type="button" className="modal-settings-button" onClick={handleTestNotification}>
-                    Testar notificação
-                  </button>
+              <button type="button" className="modal-settings-button" disabled={isSaving || !notificationsEnabled} onClick={handleTestNotification}>
+                Testar notificação
+              </button>
 
-                  {notificationPermission === "denied" ? (
-                    <p className="settings-note">
-                      Abra Ajustes &gt; Lembrete MS &gt; Notificações no iPhone para autorizar os avisos.
-                    </p>
-                  ) : null}
-                </>
-              ) : (
-                <p className="settings-note">{WEB_NOTIFICATIONS_MESSAGE}</p>
-              )}
+              {!isNativePlatform() ? <p className="settings-note">{WEB_NOTIFICATIONS_MESSAGE}</p> : null}
+              {notificationPermission === "denied" ? (
+                <p className="settings-note">Abra Ajustes &gt; Lembrete MS &gt; Notificações no iPhone para autorizar os avisos.</p>
+              ) : null}
 
               {settingsStatus ? <p className="settings-status">{settingsStatus}</p> : null}
             </section>
 
-            <button type="button" className="modal-danger" onClick={clearAllReminders}>Apagar lembretes salvos</button>
+            <button type="button" className="modal-danger" disabled={isSaving || !storageReady} onClick={clearAllReminders}>Apagar lembretes salvos</button>
             <button type="button" className="modal-secondary" onClick={() => setShowSettings(false)}>Fechar</button>
           </div>
         </div>

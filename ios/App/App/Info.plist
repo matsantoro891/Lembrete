@@ -49,5 +49,11 @@
 	<true/>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>O Lembrete MS usa notificações para avisar sobre seus compromissos no horário escolhido.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>O Lembrete MS salva e atualiza os lembretes que você escolhe adicionar ao app Lembretes do iPhone, com data, horário e alerta.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>O Lembrete MS salva e atualiza os lembretes que você escolhe adicionar ao app Lembretes do iPhone, com data, horário e alerta.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>O Lembrete MS abre um evento no Calendário para você revisar e confirmar.</string>
 </dict>
 </plist>
